@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <!-- Настройка viewport для мобильных устройств: запрет масштабирования, полный экран -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Веселый Платформер</title>
+    <style>
+        /* Сброс стилей и базовые настройки */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #2c3e50;
+            overflow: hidden; /* Отключаем скролл страницы */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* Важно для мобильных: отключает жесты браузера */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
+
+        /* Контейнер игры */
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Холст (Canvas) */
+        canvas {
+            background: linear-gradient(to bottom, #87CEEB, #E0F6FF); /* Небо */
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            max-width: 100%;
+            max-height: 80%; /* Оставляем место для кнопок снизу */
+            display: block;
+        }
+
+        /* Интерфейс поверх игры (счет, сообщения) */
+        #ui-layer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            pointer-events: none; /* Чтобы клики проходили сквозь текст */
+            display: flex;
+            justify-content: space-between;
+            color: #333;
+            font-weight: bold;
+            font-size: 20px;
+            text-shadow: 1px 1px 0 #fff;
+        }
+
+        /* Экран сообщений (Победа/Поражение) */
+        #message-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: none; /* Скрыт по умолчанию */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 100;
+        }
+
+        #message-title {
+            font-size: 32px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        button.restart-btn {
+            padding: 15px 30px;
+            font-size: 24px;
+            background-color: #2ecc71;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            box-shadow: 0 5px #27ae60;
+            transition: transform 0.1s;
+        }
+
+        button.restart-btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 1px #27ae60;
+        }
+
+        /* Блок управления (кнопки) */
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            height: 100px;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+            pointer-events: auto;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 15px;
+        }
+
+        /* Стили кнопок управления */
+        .btn {
+            width: 80px;
+            height: 80px;
+            background-color: rgba(255, 255, 255, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 30px;
+            color: white;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+            backdrop-filter: blur(5px);
+        }
+
+        .btn:active, .btn.pressed {
+            background-color: rgba(255, 255, 255, 0.6);
+            transform: scale(0.95);
+        }
+
+        /* Адаптация под очень маленькие экраны */
+        @media (max-height: 500px) {
+            canvas { max-height: 60%; }
+            .btn { width: 60px; height: 60px; font-size: 20px; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    
+    <!-- Верхний интерфейс -->
+    <div id="ui-layer">
+        <div id="score-display">Монеты: 0 / 5</div>
+        <div id="instruction">Собери 5 монет и дойди до портала!</div>
+    </div>
+
+    <!-- Экран конца игры -->
+    <div id="message-screen">
+        <h1 id="message-title">Текст сообщения</h1>
+        <button class="restart-btn" onclick="resetGame()">Играть снова</button>
+    </div>
+
+    <!-- Кнопки управления -->
+    <div id="controls">
+        <div class="control-group">
+            <div class="btn" id="btn-left">←</div>
+            <div class="btn" id="btn-right">→</div>
+        </div>
+        <div class="control-group">
+            <div class="btn" id="btn-jump">↑</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    /**
+     * Инициализация переменных и настроек
+     */
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Элементы интерфейса
+    const scoreEl = document.getElementById('score-display');
+    const msgScreen = document.getElementById('message-screen');
+    const msgTitle = document.getElementById('message-title');
+
+    // Состояние игры
+    let gameState = 'playing'; // playing, won, lost
+    let lastTime = 0;
+    let coinsCollected = 0;
+    const totalCoins = 5;
+
+    // Физические константы
+    const GRAVITY = 1500; // пикселей в секунду квадрат
+    const JUMP_FORCE = -650;
+    const MOVE_SPEED = 300;
+    
+    // Размеры игрового мира (виртуальные координаты)
+    const WORLD_WIDTH = 1200;
+    const WORLD_HEIGHT = 600;
+
+    // Объект игрока
+    const player = {
+        x: 50,
+        y: 400,
+        width: 40,
+        height: 40,
+        vx: 0,
+        vy: 0,
+        isGrounded: false,
+        color: '#FF6B6B', // Красный цвет героя
+        eyeOffset: 0 // Для анимации глаз
+    };
+
+    // Камера
+    const camera = {
+        x: 0,
+        y: 0
+    };
+
+    // Уровень: Платформы
+    // x, y - координаты левого верхнего угла, w - ширина, h - высота
+    const platforms = [
+        { x: 0, y: 550, w: 300, h: 50 },   // Старт
+        { x: 350, y: 450, w: 150, h: 30 },
+        { x: 550, y: 350, w: 100, h: 30 },
+        { x: 700, y: 250, w: 100, h: 30 },
+        { x: 850, y: 400, w: 150, h: 30 },
+        { x: 1050, y: 300, w: 150, h: 30 }, // Высокая платформа
+        { x: 0, y: 590, w: 1200, h: 10 },   // Пол "смерти" (невидимый или декоративный)
+    ];
+
+    // Монеты
+    let coins = [
+        { x: 400, y: 400, r: 15, collected: false },
+        { x: 600, y: 300, r: 15, collected: false },
+        { x: 750, y: 200, r: 15, collected: false },
+        { x: 900, y: 350, r: 15, collected: false },
+        { x: 1100, y: 250, r: 15, collected: false }
+    ];
+
+    // Финиш (Портал)
+    const portal = {
+        x: 1120,
+        y: 220,
+        w: 60,
+        h: 80,
+        color: '#3498db'
+    };
+
+    // Управление
+    const keys = {
+        left: false,
+        right: false,
+        jump: false
+    };
+
+    /**
+     * Настройка размера Canvas под экран
+     */
+    function resize() {
+        // Сохраняем пропорции, но пытаемся заполнить доступное место
+        // Ограничиваем максимальную высоту, чтобы кнопки влезли
+        const availableHeight = window.innerHeight * 0.8; 
+        const aspectRatio = WORLD_WIDTH / WORLD_HEIGHT;
+        
+        let newWidth = window.innerWidth;
+        let newHeight = newWidth / aspectRatio;
+
+        if (newHeight > availableHeight) {
+            newHeight = availableHeight;
+            newWidth = newHeight * aspectRatio;
+        }
+
+        canvas.width = newWidth;
+        canvas.height = newHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    /**
+     * Обработка ввода (Клавиатура + Тач)
+     */
+    
+    // Клавиатура
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
+        if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+        if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') keys.jump = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+        if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
+        if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+        if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') keys.jump = false;
+    });
+
+    // Сенсорные кнопки
+    const setupTouchBtn = (id, keyName) => {
+        const btn = document.getElementById(id);
+        
+        const startAction = (e) => {
+            e.preventDefault(); // Предотвращаем зум и скролл
+            keys[keyName] = true;
+            btn.classList.add('pressed');
+        };
+        
+        const endAction = (e) => {
+            e.preventDefault();
+            keys[keyName] = false;
+            btn.classList.remove('pressed');
+        };
+
+        btn.addEventListener('mousedown', startAction);
+        btn.addEventListener('mouseup', endAction);
+        btn.addEventListener('touchstart', startAction, {passive: false});
+        btn.addEventListener('touchend', endAction, {passive: false});
+        btn.addEventListener('mouseleave', endAction);
+    };
+
+    setupTouchBtn('btn-left', 'left');
+    setupTouchBtn('btn-right', 'right');
+    setupTouchBtn('btn-jump', 'jump');
+
+
+    /**
+     * Логика игры (Update)
+     */
+    function update(dt) {
+        if (gameState !== 'playing') return;
+
+        // 1. Движение по горизонтали
+        player.vx = 0;
+        if (keys.left) player.vx = -MOVE_SPEED;
+        if (keys.right) player.vx = MOVE_SPEED;
+
+        // Применяем скорость к позиции
+        player.x += player.vx * dt;
+
+        // Коллизия со стенами мира
+        if (player.x < 0) player.x = 0;
+        if (player.x + player.width > WORLD_WIDTH) player.x = WORLD_WIDTH - player.width;
+
+        // 2. Коллизия с платформами по X (упрощенная: проверяем только если не падаем сильно)
+        // В простых платформерах часто достаточно проверять коллизии после применения гравитации,
+        // но для надежности разделим оси. Здесь сделаем простую проверку AABB.
+        
+        // 3. Гравитация и прыжок
+        if (keys.jump && player.isGrounded) {
+            player.vy = JUMP_FORCE;
+            player.isGrounded = false;
+        }
+
+        player.vy += GRAVITY * dt;
+        player.y += player.vy * dt;
+
+        // 4. Проверка столкновений с платформами
+        player.isGrounded = false;
+        
+        for (let plat of platforms) {
+            // Простая проверка прямоугольников
+            if (player.x < plat.x + plat.w &&
+                player.x + player.width > plat.x &&
+                player.y < plat.y + plat.h &&
+                player.y + player.height > plat.y) {
+                
+                // Определяем направление столкновения
+                // Проверяем, падал ли игрок сверху (предыдущий Y был выше платформы)
+                const prevY = player.y - (player.vy * dt);
+                
+                // Если мы падали вниз и ноги были выше верха платформы
+                if (player.vy >= 0 && prevY + player.height <= plat.y + 10) { // +10 допуск
+                    player.y = plat.y - player.height;
+                    player.vy = 0;
+                    player.isGrounded = true;
+                } else if (player.vy < 0 && prevY >= plat.y + plat.h - 10) {
+                    // Удар головой
+                    player.y = plat.y + plat.h;
+                    player.vy = 0;
+                } else {
+                    // Боковое столкновение (простое выталкивание)
+                    // Центр игрока относительно центра платформы
+                    const playerCenter = player.x + player.width / 2;
+                    const platCenter = plat.x + plat.w / 2;
+                    
+                    if (playerCenter < platCenter) {
+                        player.x = plat.x - player.width;
+                    } else {
+                        player.x = plat.x + plat.w;
+                    }
+                }
+            }
+        }
+
+        // 5. Сбор монет
+        for (let coin of coins) {
+            if (!coin.collected) {
+                // Расстояние между центрами
+                const dx = (player.x + player.width/2) - coin.x;
+                const dy = (player.y + player.height/2) - coin.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist < coin.r + player.width/2) {
+                    coin.collected = true;
+                    coinsCollected++;
+                    scoreEl.innerText = `Монеты: ${coinsCollected} / ${totalCoins}`;
+                }
+            }
+        }
+
+        // 6. Проверка условий победы/поражения
+        
+        // Падение в пропасть
+        if (player.y > WORLD_HEIGHT) {
+            gameOver(false);
+        }
+
+        // Финиш
+        // Проверяем пересечение с порталом
+        if (player.x < portal.x + portal.w &&
+            player.x + player.width > portal.x &&
+            player.y < portal.y + portal.h &&
+            player.y + player.height > portal.y) {
+            
+            if (coinsCollected >= totalCoins) {
+                gameOver(true);
+            }
+        }
+
+        // 7. Обновление камеры
+        // Камера следит за игроком, но не выходит за границы мира
+        // Целевая позиция камеры: игрок по центру экрана
+        // Преобразуем координаты экрана в координаты мира
+        const screenW = canvas.width;
+        
+        // Масштабирование: нам нужно вместить WORLD_WIDTH в canvas.width
+        // Но лучше сделать зум, чтобы детали были видны.
+        // Допустим, мы хотим видеть область шириной 800 единиц мира на экране.
+        const viewWidth = 800; 
+        const scale = canvas.width / viewWidth;
+        
+        // Центрируем камеру на игроке
+        let targetCamX = player.x + player.width/2 - viewWidth/2;
+        
+        // Ограничиваем камеру границами мира
+        if (targetCamX < 0) targetCamX = 0;
+        if (targetCamX > WORLD_WIDTH - viewWidth) targetCamX = WORLD_WIDTH - viewWidth;
+        
+        camera.x = targetCamX;
+    }
+
+    /**
+     * Отрисовка (Render)
+     */
+    function draw() {
+        // Очистка
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Расчет масштаба для отображения всего уровня или его части
+        // Мы будем рисовать всё, применяя трансформацию контекста
+        const viewWidth = 800;
+        const scale = canvas.width / viewWidth;
+        
+        ctx.save();
+        ctx.scale(scale, scale);
+        ctx.translate(-camera.x, 0); // Сдвигаем мир влево
+
+        // 1. Рисуем платформы
+        ctx.fillStyle = '#654321'; // Коричневый
+        for (let plat of platforms) {
+            // Трава сверху
+            ctx.fillStyle = '#2ecc71';
+            ctx.fillRect(plat.x, plat.y, plat.w, 10);
+            // Земля
+            ctx.fillStyle = '#795548';
+            ctx.fillRect(plat.x, plat.y + 10, plat.w, plat.h - 10);
+            
+            // Декор (камешки)
+            ctx.fillStyle = '#5D4037';
+            ctx.fillRect(plat.x + 10, plat.y + 20, 10, 10);
+            ctx.fillRect(plat.x + plat.w - 20, plat.y + 15, 10, 10);
+        }
+
+        // 2. Рисуем монеты
+        for (let coin of coins) {
+            if (!coin.collected) {
+                ctx.beginPath();
+                ctx.arc(coin.x, coin.y, coin.r, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFD700'; // Золото
+                ctx.fill();
+                ctx.strokeStyle = '#DAA520';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // Блик
+                ctx.beginPath();
+                ctx.arc(coin.x - 5, coin.y - 5, 3, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFF';
+                ctx.fill();
+            }
+        }
+
+        // 3. Рисуем портал (Финиш)
+        ctx.fillStyle = portal.color;
+        ctx.fillRect(portal.x, portal.y, portal.w, portal.h);
+        // Вихрь внутри портала
+        ctx.strokeStyle = '#FFF';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(portal.x + portal.w/2, portal.y + portal.h/2, 20, 0, Math.PI*2);
+        ctx.stroke();
+
+        // 4. Рисуем игрока
+        ctx.fillStyle = player.color;
+        // Скругленный квадрат
+        roundRect(ctx, player.x, player.y, player.width, player.height, 5, true, false);
+        
+        // Глаза
+        ctx.fillStyle = 'white';
+        let eyeDir = 0;
+        if (keys.right) eyeDir = 4;
+        if (keys.left) eyeDir = -4;
+
+        ctx.beginPath();
+        ctx.arc(player.x + 12 + eyeDir, player.y + 15, 6, 0, Math.PI * 2); // Левый
+        ctx.arc(player.x + 28 + eyeDir, player.y + 15, 6, 0, Math.PI * 2); // Правый
+        ctx.fill();
+
+        // Зрачки
+        ctx.fillStyle = 'black';
+        ctx.beginPath();
+        ctx.arc(player.x + 12 + eyeDir, player.y + 15, 2, 0, Math.PI * 2);
+        ctx.arc(player.x + 28 + eyeDir, player.y + 15, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    // Вспомогательная функция для рисования скругленных прямоугольников
+    function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
+        if (typeof stroke === 'undefined') { stroke = true; }
+        if (typeof radius === 'undefined') { radius = 5; }
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+        if (stroke) { ctx.stroke(); }
+        if (fill) { ctx.fill(); }
+    }
+
+    /**
+     * Завершение игры
+     */
+    function gameOver(win) {
+        gameState = win ? 'won' : 'lost';
+        msgScreen.style.display = 'flex';
+        if (win) {
+            msgTitle.innerText = "Уровень пройден! 🎉";
+            msgTitle.style.color = "#2ecc71";
+        } else {
+            msgTitle.innerText = "Упс! Попробуй снова 💀";
+            msgTitle.style.color = "#e74c3c";
+        }
+    }
+
+    /**
+     * Перезапуск игры
+     */
+    function resetGame() {
+        // Сброс позиций
+        player.x = 50;
+        player.y = 400;
+        player.vx = 0;
+        player.vy = 0;
+        
+        // Сброс монет
+        coins.forEach(c => c.collected = false);
+        coinsCollected = 0;
+        scoreEl.innerText = `Монеты: 0 / ${totalCoins}`;
+        
+        // Сброс состояния
+        gameState = 'playing';
+        msgScreen.style.display = 'none';
+    }
+
+    /**
+     * Главный цикл игры
+     */
+    function gameLoop(timestamp) {
+        // Вычисляем Delta Time (в секундах)
+        if (!lastTime) lastTime = timestamp;
+        const dt = (timestamp - lastTime) / 1000;
+        lastTime = timestamp;
+
+        // Ограничиваем dt, чтобы при лагах физика не "взрывалась"
+        const safeDt = Math.min(dt, 0.1);
+
+        update(safeDt);
+        draw();
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    // Запуск
+    requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
